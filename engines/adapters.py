@@ -364,3 +364,59 @@ class ReferenceEngine(Engine):
             # завершающего двоеточия из ANSWER_PREFIX.
             sources=[unique_answers.ANSWER_PREFIX.rstrip(":")],
         )
+
+
+class DocumentSemanticEngine(Engine):
+    """Поиск по СМЫСЛУ по всему массиву документов (semantic_documents).
+
+    Последний локальный движок и финальный резерв на свободные вопросы —
+    ровно та роль, что была у убранного внешнего ИИ (Claude). Включается,
+    только когда точные движки выше не ответили: находит самый близкий по
+    смыслу абзац паспорта/каталога и отдаёт его ДОСЛОВНО, с источником и
+    оговоркой про числа. Ничего не генерирует — цитирует реальный текст.
+
+    Если модель эмбеддингов не установлена или индекс документов пуст,
+    semantic_documents.best_passage() вернёт None, движок вернёт not_handled,
+    и вопрос честно уйдёт человеку (как и было без внешнего ИИ).
+    """
+
+    name = "document_semantic"
+
+    def __init__(self) -> None:
+        # Та же причина, что у ProductEngine._cache: router.route_local()
+        # зовёт can_handle() и сразу answer() на одном вопросе — без кэша
+        # embeddings и поиск считались бы дважды.
+        self._cache: tuple[str, Any] | None = None
+
+    def _lookup(self, question: str):
+        cached = self._cache
+        if cached is not None and cached[0] == question:
+            return cached[1]
+        import semantic_documents
+
+        match = semantic_documents.best_passage(question)
+        self._cache = (question, match)
+        return match
+
+    def can_handle(self, question: str, context: dict[str, Any]) -> float:
+        match = self._lookup(question)
+        return match.score if match else 0.0
+
+    async def answer(self, question: str, context: dict[str, Any]) -> EngineResponse:
+        match = self._lookup(question)
+        if not match:
+            return EngineResponse.not_handled(self.name)
+        # Дословный абзац + честная оговорка: числа из OCR-таблиц ненадёжны,
+        # критичные характеристики сверяются с паспортом / берутся из 1С.
+        text = (
+            match.text
+            + "\n\n⚠️ Найдено в документе по смыслу. Сверьте критичные числа "
+            "(ток, мощность, напряжение) с паспортом изделия."
+        )
+        source = match.source + (f", стр. {match.page}" if match.page else "")
+        return EngineResponse(
+            text=text,
+            handled=True,
+            engine_name=self.name,
+            sources=[source],
+        )

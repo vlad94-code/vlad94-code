@@ -11,7 +11,7 @@ import logging
 from typing import Any
 
 from core.types import EngineResponse
-from engines.adapters import AccessoryCompatibilityEngine, KnowledgeEngine, ProductDetailEngine, ProductEngine, ReferenceEngine
+from engines.adapters import AccessoryCompatibilityEngine, DocumentSemanticEngine, KnowledgeEngine, ProductDetailEngine, ProductEngine, ReferenceEngine
 from engines.base import Engine
 
 logger = logging.getLogger(__name__)
@@ -39,6 +39,13 @@ LOCAL_ENGINES: list[Engine] = [
     KnowledgeEngine(),
     ProductEngine(),
     ProductDetailEngine(),
+    # Последним — поиск по смыслу по всему массиву документов (паспорта,
+    # каталоги, в т.ч. OCR). Финальный резерв на свободные вопросы, которые
+    # не разобрали точные движки выше: раньше это была работа внешнего ИИ
+    # (Claude), теперь — локальный смысловой поиск по документам. Отдаёт
+    # дословный абзац с источником; если ничего не найдено, вопрос уходит
+    # человеку.
+    DocumentSemanticEngine(),
 ]
 
 

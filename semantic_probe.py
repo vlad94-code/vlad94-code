@@ -13,11 +13,17 @@
         — прогнать встроенный тестовый набор;
 
     python semantic_probe.py "а YCW3 из корзины можно выкатить?" "ещё вопрос"
-        — прогнать свои вопросы.
+        — прогнать свои вопросы по СПРАВОЧНИКУ (89 записей);
+
+    python semantic_probe.py --docs "вопрос про паспорт" "ещё вопрос"
+        — прогнать по ДОКУМЕНТАМ (паспорта/каталоги, semantic_documents):
+          показывает три ближайших АБЗАЦА с баллами, чтобы подобрать
+          REFERENCE_DOC_THRESHOLD (по умолчанию 0.55).
 
 Как читать: если у «правильной» записи балл, например, 0.66, а у всех
 чужих — ниже 0.55, то порог 0.62–0.64 примет нужное и отсечёт лишнее.
-Ставится он в .env строкой REFERENCE_SEMANTIC_THRESHOLD=0.63.
+Ставится он в .env строкой REFERENCE_SEMANTIC_THRESHOLD=0.63 (справочник)
+или REFERENCE_DOC_THRESHOLD=... (документы).
 """
 from __future__ import annotations
 
@@ -40,11 +46,50 @@ DEFAULT_QUESTIONS = [
 ]
 
 
+def _probe_documents(questions) -> None:
+    """Прогон вопросов по документному индексу (паспорта/каталоги)."""
+    import numpy as np
+
+    import semantic_documents
+    import semantic_reference
+
+    if not semantic_reference.is_available():
+        print("❌ Поиск по смыслу выключен: модель эмбеддингов недоступна "
+              "(pip install -r requirements-semantic.txt).")
+        return
+    built = semantic_documents._build_index()
+    if built is None:
+        print("❌ Документный индекс пуст: сначала загрузите паспорта/каталоги "
+              "в бота (и, для картиночных PDF, установите OCR — requirements-ocr.txt).")
+        return
+    passages, matrix = built
+    embed = semantic_reference._embedder()
+    threshold = semantic_documents.THRESHOLD
+    print(f"Абзацев в индексе: {len(passages)}. Порог REFERENCE_DOC_THRESHOLD = {threshold}\n")
+    for question in questions:
+        query = np.asarray(embed([question]), dtype="float32")[0]
+        query = query / (np.linalg.norm(query) or 1.0)
+        scores = matrix @ query
+        order = np.argsort(-scores)[:3]
+        print(f"❓ {question!r}")
+        for rank, idx in enumerate(order, 1):
+            score = float(scores[idx])
+            mark = "✅ примет" if rank == 1 and score >= threshold else "  "
+            source, page, text = passages[int(idx)]
+            print(f"   {rank}. {score:.3f} {mark}  [{source}, стр.{page}] {text[:90]}")
+        print()
+
+
 def main() -> None:
     import numpy as np
 
     import reference_lookup
     import semantic_reference
+
+    args = sys.argv[1:]
+    if args and args[0] == "--docs":
+        _probe_documents(args[1:] or DEFAULT_QUESTIONS)
+        return
 
     if not semantic_reference.is_available():
         print("❌ Поиск по смыслу выключен: модель эмбеддингов недоступна.")
