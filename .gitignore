@@ -5,3 +5,5 @@ backups/
 __pycache__/
 *.pyc
 logs/
+.venv/
+.pytest_cache/

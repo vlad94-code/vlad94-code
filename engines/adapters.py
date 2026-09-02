@@ -340,7 +340,10 @@ class ReferenceEngine(Engine):
         cached = self._cache
         if cached is not None and cached[0] == question:
             return cached[1]
-        match = reference_lookup.lookup(question)
+        # lookup_combined: сначала словарный поиск (как раньше), затем —
+        # смысловой как второй шанс на переформулировки без общих слов.
+        # Если модель эмбеддингов недоступна, ведёт себя ровно как lookup().
+        match = reference_lookup.lookup_combined(question)
         self._cache = (question, match)
         return match
 

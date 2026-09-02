@@ -25,7 +25,6 @@ load_dotenv()
 
 import httpx
 from PIL import Image
-from anthropic import AsyncAnthropic, RateLimitError as AnthropicRateLimitError
 from telegram import BotCommand, BotCommandScopeChat, InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.constants import ChatAction
 from telegram.error import BadRequest, NetworkError, TelegramError
@@ -85,7 +84,7 @@ from core.roles import (
     require_role, resolve_role, role_of,
 )
 from engines.router import route_local
-from knowledge_matrix import rebuild, search as search_matrix
+from knowledge_matrix import rebuild
 from api_sync import (
     OPERATIONAL_SOURCES,
     STATIC_SOURCES,
@@ -99,7 +98,6 @@ logging.basicConfig(format="%(asctime)s %(levelname)s %(name)s: %(message)s", le
 logger = logging.getLogger(__name__)
 
 TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
-MODEL = os.environ.get("ANTHROPIC_MODEL", "claude-haiku-4-5-20251001")
 UPLOAD_DIR = Path(os.environ.get("UPLOADS_DIR", "uploads"))
 SUPPORTED_EXTENSIONS = {".pdf", ".docx", ".txt", ".md", ".csv", ".xlsx"}
 SYNC_PRODUCTS_HOUR = int(os.environ.get("SYNC_PRODUCTS_HOUR", "6"))
@@ -119,23 +117,6 @@ BOT_DESCRIPTION = (
 BOT_SHORT_DESCRIPTION = (
     "Подбор оборудования CNC Electric: характеристики, цены, наличие."
 )
-
-INSTRUCTIONS = """Ты — технический помощник CNC Electric для сотрудников компании.
-Отвечай на русском, кратко и профессионально. Отвечай ТОЛЬКО на основе найденных
-материалов базы знаний и блока «Актуальные данные CNC Russia API», если он дан.
-Не выдумывай характеристики, совместимость, наличие,
-цены, артикулы, нормы или схемы: числа всегда должны быть скопированы из
-предоставленных материалов, а не вычислены или предположены тобой. Если в
-материалах нет уверенного ответа, прямо напиши: «В базе знаний нет
-подтверждённого ответа» и укажи, что нужно уточнить.
-Если в вопросе спрашивают максимум/минимум параметра серии, используй агрегированный
-расчёт API, если он есть; иначе найди соответствующую таблицу серии в каталоге и
-сообщи значение. В ответе одной короткой фразой объясни путь: «по каталогу» или
-«по API». Для вопросов, связанных с безопасностью, монтажом или выбором защитных аппаратов,
-напоминай о необходимости сверки с действующей документацией и квалифицированным
-проектировщиком. Не указывай сам список источников в конце ответа — это делает код
-на основе реально найденных документов, а не ты.
-"""
 
 # Меню бота (кнопка «Меню» в Telegram) собирается под роль. Раньше список был
 # один на всех: меню обещало /reindex и /stats каждому, а команда потом
@@ -281,12 +262,6 @@ def split_for_telegram(text: str, limit: int = TELEGRAM_MAX_MESSAGE) -> list[str
     if current:
         chunks.append("\n".join(current))
     return chunks
-
-
-def source_names(matrix_rows: list[dict]) -> list[str]:
-    """Sources for a RAG answer come from the local matrix, not from a hosted
-    vector store's citation annotations — retrieval is entirely local now."""
-    return sorted({row["source"] for row in matrix_rows if row.get("source")})
 
 
 def client_start_keyboard() -> InlineKeyboardMarkup:
@@ -1446,9 +1421,17 @@ async def feedback_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) 
 async def status(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     documents, newest = summary()
     newest_text = newest.replace("T", " ").replace("+00:00", " UTC") if newest else "ещё нет"
-    ai_status = "подключена" if context.application.bot_data.get("anthropic") else "не настроена (нет ANTHROPIC_API_KEY)"
+    # Внешний ИИ отключён; вместо строки про модель Claude показываем, работает
+    # ли ЛОКАЛЬНЫЙ поиск по смыслу (есть ли скачанная модель эмбеддингов).
+    import semantic_reference
+    semantic_status = (
+        "поиск по смыслу: включён"
+        if semantic_reference.is_available()
+        else "поиск по смыслу: выключен (модель не установлена — работает поиск по словам)"
+    )
     await update.message.reply_text(
-        f"Модель: {MODEL} ({ai_status})\nАктивных документов: {documents}\nПоследняя загрузка: {newest_text}"
+        f"Внешний ИИ: отключён (только локальные данные)\n{semantic_status}\n"
+        f"Активных документов: {documents}\nПоследняя загрузка: {newest_text}"
     )
 
 
@@ -2178,92 +2161,39 @@ async def answer(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             )
             return
 
-        # Точный артикул из локальных снимков — не требует сети.
-        live_data = context.application.bot_data["cnc_api"].lookup_local(question)
-        client: AsyncAnthropic | None = context.application.bot_data.get("anthropic")
-        if client is None:
-            # cnc_api reads only the local API snapshot — no network/LLM
-            # involved — so it must still answer when Claude is down
-            # (ARCHITECTURE.md §9: "шаги 1-4 работают полностью"). This used to
-            # discard an already-found result and always claim "нет ответа".
-            #
-            # Rendered through catalog_search, not through lookup_local()'s own
-            # string: that one is written for the model — up to 20 records with
-            # every specification field inline — and in a chat window it came
-            # out as an unreadable wall (and, before clipping, one Telegram
-            # rejected outright). Same records, the one product layout the bot
-            # uses everywhere else.
-            live_records = context.application.bot_data["cnc_api"].lookup_records(question)
-            if live_records:
-                qid = log_query(question, "cnc_api_local", True, user_id=user_id, role=role.value)
-                await update.message.reply_text(
-                    clip_for_telegram(
-                        catalog_result_text(live_records, {})
-                        + "\n\n⚠️ Поиск по документам (Claude) временно недоступен — показан только снимок API."
-                    ),
-                    reply_markup=answer_keyboard(qid),
-                )
-                return
+        # Свободный вопрос, на который локальные движки не ответили.
+        #
+        # Внешний ИИ (Claude) отключён намеренно: бот работает только на
+        # локальных данных, без обращения в интернет (требование заказчика,
+        # см. README «Поиск по смыслу» и ARCHITECTURE.md §9). Поэтому здесь
+        # два честных исхода — и ни одного «сгенерированного» ответа:
+        #   1) нашли товар в локальном снимке каталога → показываем карточку;
+        #   2) однозначного ответа нет → передаём вопрос живому человеку.
+        #
+        # Переформулировки справочных вопросов ловятся РАНЬШЕ, в route_local()
+        # (reference_lookup.lookup_combined: словарный + смысловой поиск), и
+        # сюда доходит только то, чего в базе знаний действительно нет.
+        live_records = context.application.bot_data["cnc_api"].lookup_records(question)
+        if live_records:
+            # Показываем той же карточкой, что и везде, а не «сырым» выводом
+            # lookup_local(): тот написан под модель (до 20 записей со всеми
+            # полями сразу) и в чате разворачивался в нечитаемую стену.
+            qid = log_query(question, "cnc_api_local", True, user_id=user_id, role=role.value)
             await update.message.reply_text(
-                "Поиск по документам временно недоступен, каталог и счета работают.\n"
-                "В локальном каталоге нет однозначного ответа. Уточните тип оборудования, серию, ток, полюса или артикул."
+                clip_for_telegram(catalog_result_text(live_records, {})),
+                reply_markup=answer_keyboard(qid),
             )
-            qid = log_query(question, "none", False, user_id=user_id, role=role.value)
-            question_id = record_unanswered(question, "local_no_answer", user_id=user_id)
-            await notify_admins_unanswered(
-                context, question_id, question, "local_no_answer", user_id=user_id, role=role)
             return
-
-        live_context = f"\n\nАктуальные данные CNC Russia API:\n{live_data}" if live_data else ""
-        matrix_rows = search_matrix(question)
-        matrix_context = "\n".join(
-            f"[{row['kind']}; {row['source']}; стр. {row['page'] or '-'}] {row['text']}"
-            for row in matrix_rows
-        )
-        if matrix_context:
-            matrix_context = "\n\nЛокальная матрица знаний (релевантные фрагменты):\n" + matrix_context
-        message = await client.messages.create(
-            model=MODEL,
-            max_tokens=1024,
-            system=INSTRUCTIONS,
-            messages=[{"role": "user", "content": question + live_context + matrix_context}],
-        )
-        text = "".join(block.text for block in message.content if getattr(block, "type", None) == "text").strip()
-        text = text or "❓ В базе знаний нет подтверждённого ответа, сверьтесь с паспортом."
-        sources = source_names(matrix_rows)
-        if sources and "источники:" not in text.lower():
-            text += "\n\nИсточники: " + ", ".join(sources)
-        # log_query's "answered" must reflect whether we actually gave a
-        # confirmed answer, not just that the rag branch ran — otherwise
-        # /stats' "Отвечено" counts every "нет подтверждённого ответа" reply
-        # as a success (В-4).
-        answered = "в базе знаний нет подтверждённого ответа" not in text.lower()
-        qid = log_query(question, "rag", answered, user_id=user_id, role=role.value)
-        # clip_for_telegram, not a bare text[:4096]: the old slice cut mid-word
-        # and left no sign that the answer had been truncated at all.
-        await update.message.reply_text(clip_for_telegram(text), reply_markup=answer_keyboard(qid))
-        if answered:
-            # Ответ ИИ — кандидат в базу знаний, но не её часть: пока инженер
-            # не подтвердил через /approve, он никуда не индексируется.
-            # Автоматическое самообучение здесь недопустимо — одна ошибка
-            # модели закрепилась бы как подтверждённый факт (ARCHITECTURE.md §5).
-            # Категорию берём тем же лексиконом, что и каталожный поиск, —
-            # инженеру при подтверждении ничего вводить не нужно.
-            category = (resolve_category(question) or {}).get("label") or "Общие вопросы"
-            queue_for_review(question, text, sources, query_log_id=qid, category=category)
-        else:
-            question_id = record_unanswered(question, "rag_no_evidence", user_id=user_id)
-            await notify_admins_unanswered(
-                context, question_id, question, "rag_no_evidence", user_id=user_id, role=role)
-    except AnthropicRateLimitError:
         await update.message.reply_text(
-            "Каталожный поиск работает без ИИ. Для свободных технических вопросов "
-            "Claude сейчас недоступен из-за лимита API. Уточните артикул, серию или параметры товара."
+            "В каталоге и базе знаний нет подтверждённого ответа на этот вопрос.\n"
+            "Уточните тип оборудования, серию, ток, полюса или артикул — либо "
+            "передайте вопрос специалисту."
         )
-        log_query(question, "rag_rate_limited", False, user_id=user_id, role=role.value)
-        question_id = record_unanswered(question, "rag_unavailable", user_id=user_id)
+        qid = log_query(question, "none", False, user_id=user_id, role=role.value)
+        question_id = record_unanswered(question, "local_no_answer", user_id=user_id)
         await notify_admins_unanswered(
-            context, question_id, question, "rag_unavailable", user_id=user_id, role=role)
+            context, question_id, question, "local_no_answer", user_id=user_id, role=role)
+        return
     except Exception:
         logger.exception("Answer generation failed")
         await update.message.reply_text("Не удалось подготовить ответ. Попробуйте ещё раз или сообщите администратору.")
@@ -2574,11 +2504,16 @@ def preflight() -> None:
             "«Обновить цены и наличие» или выполните /sync.", snapshot,
         )
 
-    if not os.environ.get("ANTHROPIC_API_KEY"):
+    # Внешний ИИ отключён. Свободные вопросы обслуживает локальный поиск по
+    # смыслу поверх справочника (reference_lookup.lookup_combined). Если модель
+    # эмбеддингов не установлена — работает поиск по словам, а всё, чего в базе
+    # знаний нет, честно уходит специалисту.
+    import semantic_reference
+    if not semantic_reference.is_available():
         logger.warning(
-            "ANTHROPIC_API_KEY не задан: свободные технические вопросы "
-            "(«чем YCM3 отличается от YCB9?») останутся без ответа. Каталог, "
-            "цены и остатки от этого не зависят и работают."
+            "Поиск по смыслу выключен: модель эмбеддингов недоступна "
+            "(установите fastembed и дайте боту один раз скачать модель). "
+            "Пока работает поиск по словам; каталог, цены и остатки не зависят от этого."
         )
 
 
@@ -2611,7 +2546,6 @@ def main() -> None:
         raise RuntimeError("Заполните TELEGRAM_BOT_TOKEN и ADMIN_USER_IDS в .env")
     preflight()
     app = build_application(TOKEN)
-    app.bot_data["anthropic"] = AsyncAnthropic() if os.environ.get("ANTHROPIC_API_KEY") else None
     app.bot_data["cnc_api"] = CncApi()
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("help", help_command))

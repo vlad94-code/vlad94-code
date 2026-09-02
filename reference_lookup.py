@@ -385,3 +385,45 @@ def lookup(question: str, threshold: float = THRESHOLD) -> Match | None:
 
     score, _, entry = top[0]
     return Match(question=entry.question, answer=entry.answer, category=entry.category, score=score)
+
+
+def lookup_combined(question: str, threshold: float = THRESHOLD) -> Match | None:
+    """Словарный поиск, затем — смысловой как второй шанс.
+
+    Порядок именно такой:
+
+    1. `lookup()` — совпадение по словам. Оно точное и годами оттюнинговано
+       под этот справочник (см. THRESHOLD и его историю), поэтому если оно
+       нашло запись — доверяем ей и дальше не идём. Так весь набор тестов
+       словарного поиска (`tests/test_reference_lookup.py`) остаётся в силе:
+       поведение для вопросов, которые он и так покрывал, не меняется.
+
+    2. `semantic_reference.best_match()` — поиск по СМЫСЛУ. Он подключается
+       ровно там, где словарный промолчал: у вопроса нет общих значимых слов
+       с записью, но есть общий смысл («во сколько обойдётся» ↔ «стоимость»).
+       Если модель эмбеддингов недоступна (не установлена библиотека, нет
+       скачанной модели, CI без сети) — `best_match()` вернёт None, и мы
+       просто останемся с результатом словарного поиска. Ничего не ломается.
+
+    Оба прохода одинаково консервативны: при сомнении — None, вопрос уйдёт
+    живому человеку. Ложный ответ с меткой «подтверждено инженером» хуже
+    промаха (см. докстринг модуля).
+    """
+    match = lookup(question, threshold)
+    if match is not None:
+        return match
+
+    # Локальный импорт: тяжёлую библиотеку эмбеддингов не тянем, пока она
+    # реально не понадобилась, и избегаем кольца импортов с semantic_reference
+    # (тот импортирует reference_lookup внутри своих функций).
+    import semantic_reference
+
+    semantic = semantic_reference.best_match(question)
+    if semantic is None:
+        return None
+    return Match(
+        question=semantic.question,
+        answer=semantic.answer,
+        category=semantic.category,
+        score=semantic.score,
+    )

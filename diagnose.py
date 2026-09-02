@@ -12,31 +12,32 @@ from dotenv import load_dotenv
 load_dotenv()
 
 print("=" * 60)
-print("1. Проверка Claude (Anthropic) — свободные вопросы")
+print("1. Проверка поиска по смыслу (локально, без интернета)")
 print("=" * 60)
 
-key = os.environ.get("ANTHROPIC_API_KEY", "")
-model = os.environ.get("ANTHROPIC_MODEL", "claude-haiku-4-5-20251001")
+# Внешний ИИ (Claude) отключён: бот работает только на локальных данных.
+# Свободные переформулированные вопросы обслуживает локальный поиск по
+# смыслу поверх справочника (semantic_reference.py). Здесь проверяем, что он
+# доступен, и на паре фраз показываем, что модель отличает близкое от далёкого.
+try:
+    import semantic_reference
 
-if not key:
-    print("❌ ANTHROPIC_API_KEY пустой в .env — свободные вопросы ('есть на")
-    print("   постоянный ток' и т.п.) работать не будут, пока не заполните.")
-else:
-    print(f"Ключ найден (начинается с {key[:12]}...), модель: {model}")
-    try:
-        import anthropic
-
-        client = anthropic.Anthropic(api_key=key)
-        response = client.messages.create(
-            model=model,
-            max_tokens=10,
-            messages=[{"role": "user", "content": "ping"}],
-        )
-        print("✅ Claude ответил, ключ и баланс в порядке:", response.content[0].text)
-    except Exception as error:
-        print("❌ Claude не ответил. Настоящая причина ниже — это и есть то,")
-        print("   что нужно показать мне или проверить в Anthropic Console:")
-        print(f"   {type(error).__name__}: {error}")
+    if not semantic_reference.is_available():
+        print("❌ Поиск по смыслу выключен: модель эмбеддингов недоступна.")
+        print("   Установите зависимости и дайте боту один раз скачать модель:")
+        print("       pip install -r requirements-semantic.txt")
+        print("   Без этого работает поиск по словам (переформулировки ловятся хуже).")
+    else:
+        print("✅ Поиск по смыслу включён. Пробую сопоставить переформулировку…")
+        match = semantic_reference.best_match("во сколько обойдётся доставка")
+        if match:
+            print(f"   Нашёл запись справочника: «{match.question}» (близость {match.score:.2f})")
+        else:
+            print("   Модель работает, но в справочнике нет близкой записи на пробный вопрос —")
+            print("   это нормально, если там нет вопроса про доставку.")
+except Exception as error:
+    print("❌ Не удалось проверить поиск по смыслу:")
+    print(f"   {type(error).__name__}: {error}")
 
 print()
 print("=" * 60)
