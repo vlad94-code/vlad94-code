@@ -90,22 +90,76 @@ def test_below_threshold_returns_none(semantic_env):
     assert semantic_reference.best_match("во сколько обойдётся доставка", threshold=0.99) is None
 
 
-def test_ambiguous_match_between_different_answers_is_silent(monkeypatch):
-    """Две записи с РАЗНЫМИ ответами одинаково близки к запросу — молчим,
-    а не отдаём одну наугад под меткой «подтверждено инженером»."""
-    entries = (
-        _entry(1, "Вопрос А", "Ответ А"),
-        _entry(2, "Вопрос Б", "Ответ Б"),
-    )
-    vectors = {"Вопрос А": [1.0, 0.0], "Вопрос Б": [1.0, 0.0], "запрос": [1.0, 0.0]}
+def _patch(monkeypatch, entries, vectors, dim):
     monkeypatch.setattr(reference_lookup, "entries", lambda: entries)
-    monkeypatch.setattr(semantic_reference, "_load_backend",
-                        lambda: (lambda texts: [vectors.get(t, [0.0, 0.0]) for t in texts]))
+    monkeypatch.setattr(
+        semantic_reference, "_load_backend",
+        lambda: (lambda texts: [vectors.get(t, [0.0] * dim) for t in texts]),
+    )
     monkeypatch.setattr(semantic_reference, "_load_disk_cache", lambda fingerprint: None)
     monkeypatch.setattr(semantic_reference, "_save_disk_cache", lambda fingerprint, vectors: None)
     semantic_reference.reset_cache()
+
+
+def test_low_confidence_ambiguity_is_silent(monkeypatch):
+    """НЕвысокий балл + ничья между РАЗНЫМИ ответами без общих слов → молчим.
+    Отдать один наугад под «подтверждено инженером» нельзя."""
+    entries = (
+        _entry(1, "Альфа", "Ответ А"),
+        _entry(2, "Бета", "Ответ Б"),
+    )
+    # Обе записи под одним углом к запросу: косинус ≈ 0.65 (ниже _HIGH_CONFIDENCE
+    # 0.80, но выше порога 0.60), общих слов с «запрос» нет.
+    vectors = {"Альфа": [0.65, 0.76], "Бета": [0.65, 0.76], "запрос": [1.0, 0.0]}
+    _patch(monkeypatch, entries, vectors, dim=2)
     try:
-        assert semantic_reference.best_match("запрос") is None
+        assert semantic_reference.best_match("запрос", threshold=0.60) is None
+    finally:
+        semantic_reference.reset_cache()
+
+
+def test_high_confidence_cluster_returns_top(monkeypatch):
+    """Уверенно высокий балл (как у реального «YCW3 …»: 0.829/0.828/0.825):
+    записи стоят вплотную и отвечают на разное, слова не разводят — но тема
+    точно верная, поэтому берём лучший по смыслу, а не молчим."""
+    entries = (
+        _entry(1, "выкатное исполнение", "Да, W — выкатной."),
+        _entry(2, "базовая комплектация", "Состав комплектации…"),
+        _entry(3, "регулируемая уставка", "Есть регулировка…"),
+    )
+    vectors = {
+        "выкатное исполнение": [0.999, 0.045, 0.0],   # ~0.999 к запросу
+        "базовая комплектация": [0.998, 0.0, 0.063],  # ~0.998
+        "регулируемая уставка": [0.997, 0.0, 0.077],  # ~0.997
+        "можно ли выкатить": [1.0, 0.0, 0.0],
+    }
+    _patch(monkeypatch, entries, vectors, dim=3)
+    try:
+        match = semantic_reference.best_match("можно ли выкатить")
+        assert match is not None
+        assert match.answer == "Да, W — выкатной."  # лучший по смыслу
+    finally:
+        semantic_reference.reset_cache()
+
+
+def test_word_overlap_breaks_the_cluster(monkeypatch):
+    """В «кусте» побеждает запись, делящая с вопросом значимое слово, —
+    даже если по смыслу она не самый первый номер."""
+    entries = (
+        _entry(1, "гарантия оборудование", "Про гарантию."),
+        _entry(2, "доставка сроки", "Про доставку."),
+    )
+    # Обе близки к запросу (куст), но слово «доставка» есть только во второй.
+    vectors = {
+        "гарантия оборудование": [1.0, 0.02],
+        "доставка сроки": [0.999, 0.045],
+        "во сколько доставка": [1.0, 0.0],
+    }
+    _patch(monkeypatch, entries, vectors, dim=2)
+    try:
+        match = semantic_reference.best_match("во сколько доставка", threshold=0.60)
+        assert match is not None
+        assert match.answer == "Про доставку."  # разведено по слову «доставка»
     finally:
         semantic_reference.reset_cache()
 

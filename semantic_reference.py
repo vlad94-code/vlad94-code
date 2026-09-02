@@ -59,12 +59,20 @@ MODEL_NAME = os.environ.get(
 # сформулированы вопросы в конкретном `unique_answers.md`.
 THRESHOLD = float(os.environ.get("REFERENCE_SEMANTIC_THRESHOLD", "0.72"))
 
-# Разрыв между лучшим и вторым кандидатом, ниже которого совпадение считаем
-# неоднозначным и молчим — но только если у них РАЗНЫЕ ответы. Тот же мотив,
-# что у тай-брейка в reference_lookup.lookup: два одинаково близких вопроса с
-# разными ответами — сигнал, что вопрос недоспецифицирован, а не повод
-# выдать произвольный из них под меткой «подтверждено инженером».
-_AMBIGUITY_MARGIN = float(os.environ.get("REFERENCE_SEMANTIC_MARGIN", "0.02"))
+# Ширина «куста» вокруг лучшего балла: записи в пределах этого разрыва от
+# лидера считаются одинаково близкими и разбираются тай-брейком (см.
+# best_match). У вопросов про одно изделие несколько записей справочника
+# закономерно стоят вплотную (например все про YCW3 — 0.829/0.828/0.825),
+# поэтому «куст» здесь ожидаем и сам по себе НЕ повод молчать.
+_AMBIGUITY_MARGIN = float(os.environ.get("REFERENCE_SEMANTIC_MARGIN", "0.03"))
+
+# Уровень уверенности, выше которого лучший кандидат берётся даже когда
+# тай-брейк по словам не развёл «куст»: балл заведомо высокий, а порог уже
+# гарантировал, что тема правильная — молчать здесь хуже, чем отдать лучший
+# по смыслу ответ. Ниже этого уровня неразрешённая ничья между РАЗНЫМИ
+# ответами по-прежнему приводит к молчанию (безопаснее промолчать, чем
+# выдать чужой ответ под меткой «подтверждено инженером»).
+_HIGH_CONFIDENCE = float(os.environ.get("REFERENCE_SEMANTIC_CONFIDENT", "0.80"))
 
 # Выключатель на случай, если семантику надо отключить целиком, не удаляя
 # библиотеку (например, чтобы сравнить поведение или сэкономить память).
@@ -240,28 +248,61 @@ def best_match(question: str, threshold: float = THRESHOLD) -> SemanticMatch | N
     query = query / norm
 
     scores = matrix @ query  # косинус: обе стороны уже нормированы
-    order = np.argsort(-scores)
-    best = int(order[0])
+    order = [int(i) for i in np.argsort(-scores)]
+    best = order[0]
     best_score = float(scores[best])
     if best_score < threshold:
         return None
 
-    # Неоднозначность: второй кандидат почти так же близок, но отвечает на
-    # другое — отдать один из них наугад под «подтверждено инженером» нельзя.
-    if len(order) > 1:
-        second = int(order[1])
-        if (best_score - float(scores[second])) < _AMBIGUITY_MARGIN and (
-            entries[best].answer != entries[second].answer
-        ):
+    # «Куст» — записи в пределах _AMBIGUITY_MARGIN от лидера. Если у них у всех
+    # один и тот же ответ (или куст из одной записи) — неоднозначности нет,
+    # берём лидера.
+    cluster = [i for i in order if best_score - float(scores[i]) <= _AMBIGUITY_MARGIN]
+    chosen = best
+    if len({entries[i].answer for i in cluster}) > 1:
+        chosen = _resolve_cluster(question, entries, scores, cluster, best, best_score)
+        if chosen is None:
             return None
 
-    entry = entries[best]
+    entry = entries[chosen]
     return SemanticMatch(
         question=entry.question,
         answer=entry.answer,
         category=entry.category,
-        score=best_score,
+        score=float(scores[chosen]),
     )
+
+
+def _resolve_cluster(question, entries, scores, cluster, best, best_score):
+    """Разрешить «куст» одинаково близких записей с РАЗНЫМИ ответами.
+
+    Три исхода по возрастанию осторожности:
+      1) тай-брейк по СЛОВАМ — если ровно одна запись куста делит с вопросом
+         больше всего значимых слов, берём её (тот же словарный сигнал, что и
+         в reference_lookup, только для разведения смыслового куста);
+      2) слова не развели, но балл заведомо высокий (>= _HIGH_CONFIDENCE) —
+         тема точно верная, отдаём лучший по смыслу, а не молчим;
+      3) иначе (ничья и невысокий балл) — молчим: чужой ответ под меткой
+         «подтверждено инженером» хуже, чем передать вопрос человеку.
+    Возвращает индекс выбранной записи или None (молчание).
+    """
+    import reference_lookup  # тот же разбор значимых слов, что и в словарном поиске
+
+    question_words = reference_lookup._meaningful_words(question)
+
+    def overlap(index: int) -> int:
+        entry_words = reference_lookup._meaningful_words(entries[index].question)
+        matched_q, _ = reference_lookup._matched_words(question_words, entry_words)
+        return len(matched_q)
+
+    overlaps = {index: overlap(index) for index in cluster}
+    top_overlap = max(overlaps.values())
+    leaders = [index for index in cluster if overlaps[index] == top_overlap]
+    if top_overlap > 0 and len(leaders) == 1:
+        return leaders[0]
+    if best_score >= _HIGH_CONFIDENCE:
+        return best
+    return None
 
 
 def is_available() -> bool:
