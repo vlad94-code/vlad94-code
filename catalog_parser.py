@@ -325,19 +325,36 @@ def _table_to_markdown(table: list[list[object]]) -> str:
 
 
 def parse_pdf_catalog(pdf_path: Path, output_path: Path, source_name: str) -> Path:
-    """Extract page text and tables, preserving product rows for retrieval."""
+    """Extract page text and tables, preserving product rows for retrieval.
+
+    Паспорта и часть каталогов CNC сделаны в CorelDRAW и сохранены как
+    картинки — у таких страниц `pdfplumber` не находит ни символа. Если текст
+    страницы пуст (или почти), включается OCR (ocr.ocr_page): страница
+    рендерится и распознаётся. OCR необязателен — без установленного Tesseract
+    ocr.available() == False, и парсер ведёт себя как раньше (просто пустая
+    страница у картиночного PDF).
+    """
     try:
         import pdfplumber
     except ImportError as error:
         raise RuntimeError("Не установлен pdfplumber. Выполните: python -m pip install -r requirements.txt") from error
+    import ocr
     parts = [f"# Каталог CNC Electric: {source_name}", ""]
     with pdfplumber.open(pdf_path) as pdf:
         for number, page in enumerate(pdf.pages, start=1):
             parts.append(f"## Страница {number}")
             text = page.extract_text(x_tolerance=2, y_tolerance=3) or ""
+            tables = page.extract_tables()
+            if len(text.strip()) < ocr.MIN_TEXT_CHARS and not tables:
+                # Картиночная страница (типичный экспорт из CorelDRAW): текста
+                # и таблиц нет — распознаём. OCR-проза годится для поиска;
+                # числа бот берёт из 1С, а не отсюда (см. ocr.py, ARCHITECTURE §5).
+                recognized = ocr.ocr_page(pdf_path, number - 1)
+                if recognized:
+                    text = recognized
             if text:
                 parts.extend([text, ""])
-            for index, table in enumerate(page.extract_tables(), start=1):
+            for index, table in enumerate(tables, start=1):
                 markdown = _table_to_markdown(table)
                 if markdown:
                     parts.extend([f"### Таблица {index}", markdown, ""])
