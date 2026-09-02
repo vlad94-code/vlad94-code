@@ -1,0 +1,67 @@
+# Корпус вопросов холодного клиента (спека, Приложение А).
+# kind: ожидаемая ступень лестницы — article | reference | catalog |
+#       replacement | escalate_support | escalate_manager
+# Тупиков быть не должно ни у одного вопроса.
+- {q: "Кто вы такие?", kind: reference}
+- {q: "CNC Electric это чей бренд?", kind: reference}
+- {q: "Вы производитель или перекупщики?", kind: reference}
+- {q: "Где вы находитесь?", kind: reference}
+- {q: "У вас есть офис в Москве?", kind: reference}
+- {q: "Как с вами связаться?", kind: reference}
+- {q: "Вы официальный представитель?", kind: reference}
+- {q: "Сколько лет вы на рынке?", kind: reference}
+- {q: "Чем вы вообще торгуете?", kind: reference}
+- {q: "Что у вас есть из ассортимента?", kind: reference}
+- {q: "Автоматические выключатели есть?", kind: reference}
+- {q: "Вы делаете щиты под ключ?", kind: escalate_support}
+- {q: "Частотники продаёте?", kind: reference}
+- {q: "Есть ли у вас оборудование среднего напряжения?", kind: reference}
+- {q: "Скиньте каталог", kind: reference}
+- {q: "Есть прайс-лист?", kind: reference}
+- {q: "Чем заменить ABB S203?", kind: replacement}
+- {q: "Аналог Schneider Acti9", kind: replacement}
+- {q: "У вас есть замена IEK ВД1-63?", kind: replacement}
+- {q: "Подберите аналог автомата ABB", kind: replacement}
+- {q: "Что у вас вместо Legrand?", kind: replacement}
+- {q: "Чем отличается от китайского ноунейма?", kind: reference}
+- {q: "У вас качество как у европейцев?", kind: reference}
+- {q: "Сколько стоит?", kind: escalate_manager}
+- {q: "Цена на автомат 16А", kind: escalate_manager}
+- {q: "Как купить?", kind: escalate_manager}
+- {q: "Как оформить заказ?", kind: reference}
+- {q: "Продаёте физлицам?", kind: reference}
+- {q: "Какая минимальная партия?", kind: reference}
+- {q: "Работаете с дистрибьюторами?", kind: reference}
+- {q: "Дайте скидку", kind: escalate_manager}
+- {q: "Пришлите реквизиты", kind: escalate_manager}
+- {q: "Есть на складе?", kind: escalate_manager}
+- {q: "Когда будет поставка?", kind: escalate_manager}
+- {q: "Сколько ждать заказную позицию?", kind: escalate_manager}
+- {q: "Отправляете в Новосибирск?", kind: reference}
+- {q: "Какой транспортной компанией отправляете?", kind: reference}
+- {q: "Можно самовывозом?", kind: reference}
+- {q: "Какая гарантия?", kind: reference}
+- {q: "Есть сертификат соответствия?", kind: reference}
+- {q: "Пришлите сертификат ТР ТС", kind: reference}
+- {q: "У меня сгорел автомат, что делать?", kind: reference}
+- {q: "Как оформить рекламацию?", kind: reference}
+- {q: "Оборудование бракованное, куда писать?", kind: reference}
+- {q: "Есть ли декларация ЕАС?", kind: reference}
+- {q: "Что такое УЗДП?", kind: reference}
+- {q: "Чем отличается УЗО от дифавтомата?", kind: reference}
+- {q: "Что такое Icu?", kind: reference}
+- {q: "Что означает характеристика C в автомате?", kind: reference}
+- {q: "Зачем нужен контактор?", kind: reference}
+- {q: "Что такое АВР?", kind: reference}
+- {q: "Расшифруйте маркировку YCB9", kind: escalate_support}
+- {q: "Какой автомат поставить на розетки?", kind: escalate_support}
+- {q: "Нужен автомат на 63А трёхполюсный", kind: catalog}
+- {q: "Подберите контактор на двигатель 15 кВт", kind: escalate_support}
+- {q: "Что поставить на ввод в частном доме?", kind: escalate_support}
+- {q: "Нужен рубильник на 250А", kind: catalog}
+- {q: "Какой номинал взять для кабеля 4 квадрата?", kind: escalate_support}
+- {q: "Аксессуары к YCW3", kind: reference}
+- {q: "Привет", kind: reference}
+- {q: "?", kind: reference}
+- {q: "Хочу устроиться к вам на работу", kind: escalate_support}
+- {q: "Вы дилеров ищете?", kind: escalate_support}

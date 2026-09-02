@@ -1,0 +1,108 @@
+# Golden set — эталонные вопросы для проверки роутера и промптов.
+#
+# ARCHITECTURE.md §10: 50 реальных вопросов из логов, прогон перед каждым
+# изменением промпта или роутера. Порог: 100% точности на числовых/технических
+# фактах, ≥90% на свободных формулировках.
+#
+# ВАЖНО (Г-2): настоящих 50 вопросов из query_log здесь пока нет и не может
+# быть — ARCHITECTURE.md прямо откладывает их сбор до начала Спринта 4
+# «обкатка» (пилот ещё не начался, история запросов пуста). Записи ниже —
+# не подслушанные у менеджеров формулировки, а вопросы, которые я подобрал
+# вручную под реальные данные текущего снимка (data/api_exports/products.json)
+# и прогнал через настоящий router.route_local(), чтобы expected_module
+# отражал фактическое поведение, а не то, что хотелось бы увидеть. Это даёт
+# работающую инфраструктуру прогона (tests/test_golden_set.py, pytest) уже
+# сейчас; сами вопросы нужно заменить реальными после начала пилота.
+#
+# Формат одной записи:
+#   question: текст вопроса (с опечатками, если нужно проверить их обработку)
+#   expected_module: engine_name из EngineResponse ("product", "product_detail",
+#     "knowledge") или "router" — если вопрос не должен быть обработан
+#     локально (маршрутизация в bot.py на Claude/RAG для проверки роутером
+#     не покрывается: это требует живого ANTHROPIC_API_KEY)
+#   expected_contains: подстроки, которые обязаны быть в ответе
+#   notes: почему этот вопрос в наборе
+
+- question: "воздушный выключатель на 1600А"
+  expected_module: product
+  expected_contains: []
+  notes: "Каталожные фильтры без точного артикула: тип + ток."
+
+- question: "Артикул: A000065"
+  expected_module: product
+  expected_contains:
+    - "A000065"
+  notes: "Точный артикул из реального снимка (products.json)."
+
+- question: "контакторы"
+  expected_module: product
+  expected_contains: []
+  notes: "Категория по прямому синониму из lexicon.py."
+
+- question: "выклчатель в литом корпусе"
+  expected_module: product
+  expected_contains: []
+  notes: "Опечатка из lexicon.TYPO_MAP («выклчатель» -> «выключатель»)."
+
+- question: "диф автомат в литом корпусе"
+  expected_module: product
+  expected_contains: []
+  notes: "Проверяет порядок категорий в lexicon.py: более специфичная не должна проиграть общей «литой корпус»."
+
+- question: "модульный автомат 3P"
+  expected_module: product
+  expected_contains: []
+  notes: "Категория + число полюсов одновременно."
+
+- question: "поток 40 по трубе, воздушный выключатель"
+  expected_module: product
+  expected_contains: []
+  notes: "В-1 регресс: «ток» внутри «поток» не должен подставиться как current; товар находится по одному только типу."
+
+- question: "что такое характеристика C"
+  expected_module: knowledge
+  expected_contains:
+    - "Характеристика C"
+  notes: "Явный запрос определения — knowledge_v2.explain_tripping_characteristic()."
+
+- question: "есть ли выключатели с характеристикой K"
+  expected_module: knowledge
+  expected_contains:
+    - "Характеристика K"
+  notes: "К-2 регресс: только явные буквы B/C/D/K/Z, без фантазийных совпадений."
+
+- question: "какие характеристики бывают"
+  expected_module: knowledge
+  expected_contains: []
+  notes: "Сводный список — knowledge_v2.list_all_characteristics()."
+
+- question: "какая погода в Москве"
+  expected_module: router
+  expected_contains: []
+  notes: "Ни один локальный движок не должен взяться — уходит в свободный вопрос (RAG в bot.py)."
+
+- question: "чем YCM3 отличается от YCB9?"
+  expected_module: router
+  expected_contains: []
+  notes: >
+    Раньше был известным пробелом роутера (ProductEngine перехватывал по
+    голой серии YCM3 и отвечал списком товаров вместо сравнения) —
+    починено вместе с загрузкой проверенных ответов техслужбы: ProductEngine
+    теперь не претендует на вопрос, если извлечена только "series" и вопрос
+    похож на технический/сравнительный ("отлича", "можно ли", "аналог" и т.п.,
+    engines/adapters.py::_TECHNICAL_INTENT_RE) — уходит в RAG, как и должно.
+
+- question: "входит ли корзина в выкатной автомат ycw3"
+  expected_module: router
+  expected_contains: []
+  notes: >
+    Проверенные ответы техслужбы CNC (register_local_document.py на
+    uploads/Вопросы_технической_службе_..._2.docx). ProductEngine раньше
+    перехватывал такие вопросы по голой серии YCW3 — см. _TECHNICAL_INTENT_RE.
+    route_local() сам ответ не даёт (это RAG/Claude в bot.py, не покрыто
+    здесь) — проверяется только что локальные движки корректно отказались.
+
+- question: "можно ли использовать ycb9rl-63b вместо type f schneider"
+  expected_module: router
+  expected_contains: []
+  notes: "Тот же регресс, что и выше — вопрос про замену/аналог, не про список товаров серии."
