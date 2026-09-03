@@ -23,8 +23,28 @@ from __future__ import annotations
 import io
 import logging
 import os
+from pathlib import Path
 
 logger = logging.getLogger(__name__)
+
+# Где искать сам бинарь Tesseract, если его нет в PATH. Так пользователю на
+# Windows НЕ нужно вручную править переменную PATH: достаточно установить
+# Tesseract в папку по умолчанию. Явный путь можно задать в .env через
+# TESSERACT_CMD, он проверяется первым.
+_TESSERACT_CANDIDATES = (
+    os.environ.get("TESSERACT_CMD"),
+    r"C:\Program Files\Tesseract-OCR\tesseract.exe",
+    r"C:\Program Files (x86)\Tesseract-OCR\tesseract.exe",
+)
+
+
+def _configure_tesseract(pytesseract) -> None:
+    """Указать pytesseract путь к tesseract.exe, если он не в PATH.
+    Молча ничего не делает, если бинарь и так в PATH (Linux/mac)."""
+    for candidate in _TESSERACT_CANDIDATES:
+        if candidate and Path(candidate).exists():
+            pytesseract.pytesseract.tesseract_cmd = candidate
+            return
 
 # Язык(и) распознавания. Русский + латиница: в паспортах и то и другое
 # (обозначения серий, стандарты IEC). Требует установленных языковых пакетов
@@ -53,6 +73,7 @@ def available() -> bool:
     try:
         import pymupdf  # noqa: F401
         import pytesseract
+        _configure_tesseract(pytesseract)  # найти tesseract.exe вне PATH (Windows)
         pytesseract.get_tesseract_version()
         _available = True
     except Exception:

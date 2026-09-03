@@ -5,8 +5,10 @@
 #
 # Кроме этих пакетов Python требуется САМ Tesseract в системе:
 #   Windows: установщик https://github.com/UB-Mannheim/tesseract/wiki
-#            (при установке отметьте языковой пакет Russian), затем добавьте
-#            папку установки в PATH.
+#            (при установке ОБЯЗАТЕЛЬНО отметьте языковой пакет Russian).
+#            PATH трогать НЕ нужно: бот сам ищет tesseract.exe в папке по
+#            умолчанию C:\Program Files\Tesseract-OCR. Если поставили в другое
+#            место — пропишите путь в .env: TESSERACT_CMD=C:\...\tesseract.exe
 #   Linux:   sudo apt-get install tesseract-ocr tesseract-ocr-rus
 #
 # Проверить готовность: python -c "import ocr; print(ocr.available())"

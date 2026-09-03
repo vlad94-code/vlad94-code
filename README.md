@@ -108,9 +108,13 @@ pip install -r requirements-ocr.txt
 ```
 
 Дополнительно нужен сам Tesseract в системе (Windows-установщик и языковой
-пакет Russian — ссылки в `requirements-ocr.txt`). После этого при загрузке
+пакет **Russian** — ссылки в `requirements-ocr.txt`). **PATH настраивать не
+нужно** — бот сам находит `tesseract.exe` в стандартной папке
+`C:\Program Files\Tesseract-OCR`; если он установлен в другое место, укажите
+путь в `.env`: `TESSERACT_CMD=C:\...\tesseract.exe`. После этого при загрузке
 PDF, из которого не извлёкся текст, страница автоматически распознаётся.
-Проверить готовность: `python -c "import ocr; print(ocr.available())"`.
+Проверить готовность: `python -c "import ocr; print(ocr.available())"`
+(должно быть `True`).
 
 ⚠️ ЧИСЛА из OCR ненадёжны (колонки таблиц «съезжают»): OCR-текст идёт в
 поиск как справочная проза, а точные характеристики бот берёт из 1С, не из
